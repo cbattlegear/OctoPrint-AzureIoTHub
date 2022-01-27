@@ -60,7 +60,8 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
                 self._device_client.shutdown()
             if len(new_conn_string) > 0:
                 self._device_client = IoTHubDeviceClient.create_from_connection_string(new_conn_string)
-                asyncio.run(self._device_client.connect())
+                loop = asyncio.get_event_loop()
+                loop.run_until_complete(self._device_client.connect())
                 self.start_iot_timer(new_int)
 
     def start_iot_timer(self, interval):
