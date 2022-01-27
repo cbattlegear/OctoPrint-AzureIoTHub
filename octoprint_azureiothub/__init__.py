@@ -47,7 +47,6 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
         )
 
     def on_settings_save(self, data):
-        self._logger.info("Settings saved")
         old_conn_string = self._settings.get(["connection_string"])
         old_int = self._settings.get_int(["send_interval"])
 
@@ -56,19 +55,15 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
         new_conn_string = self._settings.get(["connection_string"])
         new_int = self._settings.get_int(["send_interval"])
 
-        self._logger.info(new_conn_string)
-
         if old_conn_string != new_conn_string:
             if self._device_client:
                 self._device_client.shutdown()
             if len(new_conn_string) > 0:
-                self._logger.info("Connecting to IoT Hub")
                 self._device_client = IoTHubDeviceClient.create_from_connection_string(new_conn_string)
                 asyncio.run(self._device_client.connect())
                 self.start_iot_timer(new_int)
 
     def start_iot_timer(self, interval):
-        self._logger.info("Starting Timer")
         self._iot_timer = octoprint.util.ResettableTimer(interval, self.periodic_data_wrapper)
         self._iot_timer.start()
 
@@ -78,12 +73,10 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
 
     
     async def send_periodic_telemetry_data(self):
-        self._logger.info("Attempting to send data")
         if self._printer_connected:
             self._message_count += 1
             iot_dict = self.iot_data_json_prep()
             msg = Message(json.dumps(iot_dict))
-            self._logger.info(json.dumps(iot_dict))
             msg.message_id = uuid.uuid4()
             msg.correlation_id = "correlation-" + str(self._message_count)
             msg.content_encoding = "utf-8"
@@ -130,10 +123,8 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
     #    }
     
     def on_after_startup(self):
-        self._logger.info("Starting Plugin")
         conn_string = self._settings.get(["connection_string"])
         if len(conn_string) > 0:
-            self._logger.info("Connecting to IoT Hub")
             self._device_client = IoTHubDeviceClient.create_from_connection_string(conn_string)
             try:
                 asyncio.run(self._device_client.connect())
