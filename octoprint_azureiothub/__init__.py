@@ -8,14 +8,6 @@ import uuid
 from azure.iot.device.aio import IoTHubDeviceClient
 from azure.iot.device import Message
 
-### (Don't forget to remove me)
-# This is a basic skeleton for your plugin's __init__.py. You probably want to adjust the class name of your plugin
-# as well as the plugin mixins it's subclassing from. This is really just a basic skeleton to get you started,
-# defining your plugin as a template plugin, settings and asset plugin. Feel free to add or remove mixins
-# as necessary.
-#
-# Take a look at the documentation on what other plugin mixins are available.
-
 import octoprint.plugin
 import octoprint.util
 
@@ -32,7 +24,6 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
         self._device_client = None
         self.iot_data = {}
         self._message_count = 0
-        self._printer_connected = False
 
     def initialize(self):
         self._printer.register_callback(self)
@@ -70,7 +61,7 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
 
     
     async def send_periodic_telemetry_data(self):
-        if self._printer_connected:
+        if self._printer.get_current_connection()[0] != "Closed":
             self._message_count += 1
             iot_dict = self.iot_data_json_prep()
             msg = Message(json.dumps(iot_dict))
@@ -79,9 +70,17 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
             msg.content_encoding = "utf-8"
             msg.content_type = "application/json"
             self._logger.info("IoT Hub Telemetry Message #%d" % self._message_count)
-            await self._device_client.send_message(msg)
+            try:
+                await self._device_client.send_message(msg)
+            except Exception as e:
+                self._logger.error("Could not send IoT Telemetry Message")
+                self._logger.error(str(e))
             if "temperature" in iot_dict:
-                await self._device_client.patch_twin_reported_properties(iot_dict["temperature"])
+                try:
+                    await self._device_client.patch_twin_reported_properties(iot_dict["temperature"])
+                except Exception as e:
+                    self._logger.error("Could not send Device twin update")
+                    self._logger.error(str(e))
 
     async def send_event_telemetry_data(self, message):
         self._message_count += 1
@@ -91,7 +90,11 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
         msg.content_encoding = "utf-8"
         msg.content_type = "application/json"
         self._logger.info("IoT Hub Event Message #%d" % self._message_count)
-        await self._device_client.send_message(msg)
+        try:
+            await self._device_client.send_message(msg)
+        except Exception as e:
+            self._logger.error("Could not send IoT Event Message")
+            self._logger.error(str(e))
 
     def iot_data_json_prep(self):
         thawed = octoprint.util.thaw_immutabledict(self.iot_data)
@@ -100,10 +103,6 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
         return thawed
 
     def on_event(self, event, payload):
-        if event == 'Connected':
-            self._printer_connected = True
-        if event == 'Disconnected':
-            self._printer_connected = False
         if event == 'PrintStarted' or event == 'PrintFailed' or event == 'PrintDone' or event == 'PrintCancelled':
             payload['print_event'] = event
             asyncio.run(self.send_event_telemetry_data(json.dumps(payload)))
