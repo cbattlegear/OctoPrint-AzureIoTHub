@@ -56,13 +56,9 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
         new_int = self._settings.get_int(["send_interval"])
 
         if old_conn_string != new_conn_string:
-            if self._device_client:
-                self._device_client.shutdown()
             if len(new_conn_string) > 0:
-                self._device_client = IoTHubDeviceClient.create_from_connection_string(new_conn_string)
-                loop = asyncio.get_event_loop()
-                loop.run_until_complete(self._device_client.connect())
-                self.start_iot_timer(new_int)
+                if self.connect_to_iot_hub():
+                    self.start_iot_timer(new_int)
 
     def start_iot_timer(self, interval):
         self._iot_timer = octoprint.util.ResettableTimer(interval, self.periodic_data_wrapper)
@@ -124,20 +120,37 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
     #    }
     
     def on_after_startup(self):
-        conn_string = self._settings.get(["connection_string"])
-        if len(conn_string) > 0:
-            self._device_client = IoTHubDeviceClient.create_from_connection_string(conn_string)
-            try:
-                asyncio.run(self._device_client.connect())
-            except Exception as e:
-                self._logger.info(str(e))
-
-            if self._device_client.connected:
-                self._logger.info("Successfully Connected to IoT Hub")
+        if self.connect_to_iot_hub():
             interval = self._settings.get_int(["send_interval"])
             self.start_iot_timer(interval)
             #self._device_client.on_twin_desired_properties_patch_received = twin_patch_handler
             #self._device_client.on_message_received = message_received_handler
+
+    # Primary connection process for IoT Hub
+    # If the connection string isn't set in settings, return false, don't retry
+    # If connection string is set, attempt to connect, if it succeeds return True
+    # if it fails, retry in a minute, return False
+    def connect_to_iot_hub(self):
+        conn_string = self._settings.get(["connection_string"])
+        if len(conn_string) > 0:
+            if self._device_client:
+                self._device_client.shutdown()
+            try:
+                if len(conn_string) > 0:
+                    self._device_client = IoTHubDeviceClient.create_from_connection_string(conn_string)
+                    loop = asyncio.get_event_loop()
+                    loop.run_until_complete(self._device_client.connect())
+                    return True
+            except Exception as e:
+                self._logger.error("Could not connect to Azure IoT Hub with giving connection string")
+                self.start_connection_retry_timer(60)
+                return False
+        else:
+            return False
+
+    def start_connection_retry_timer(self, interval):
+        self._connection_retry_timer = octoprint.util.ResettableTimer(interval, self.connect_to_iot_hub)
+        self._connection_retry_timer.start()
 
     def on_printer_send_current_data(self, data):
         self.iot_data = data
