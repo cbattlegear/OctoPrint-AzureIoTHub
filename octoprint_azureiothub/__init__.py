@@ -58,7 +58,18 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
 
         if old_conn_string != new_conn_string:
             if len(new_conn_string) > 0:
-                if asyncio.run(self.connect_to_iot_hub()):
+                # Added loop check for Async calls to resolve Issue #1
+                loop = None
+                connection_success = False
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                if loop and loop.is_running():
+                    connection_success = loop.run_until_complete(self.connect_to_iot_hub())
+                else:
+                    connection_success = asyncio.run(self.connect_to_iot_hub())
+                if connection_success:
                     self.start_iot_timer(new_int)
 
     # Our timer to push telemetry on schedule
@@ -146,7 +157,19 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
     
     # If we are starting up, we should probably try to connect to IoT hub and start sending data
     def on_after_startup(self):
-        if asyncio.run(self.connect_to_iot_hub()):
+        # Added loop check for Async calls to resolve Issue #1
+        loop = None
+        connection_success = False
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop and loop.is_running():
+            connection_success = loop.run_until_complete(self.connect_to_iot_hub())
+        else:
+            connection_success = asyncio.run(self.connect_to_iot_hub())
+
+        if connection_success:
             interval = self._settings.get_int(["send_interval"])
             self.start_iot_timer(interval)
             #self._device_client.on_twin_desired_properties_patch_received = twin_patch_handler
