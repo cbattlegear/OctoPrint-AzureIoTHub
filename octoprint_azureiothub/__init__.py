@@ -20,16 +20,21 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
     octoprint.printer.PrinterCallback
 ):
 
+    # Create our IoT Device client, data holder, and message counter 
+    # I may have to worry if it runs a REALLY long time that I overflow the count
+    # Even if it's every second though that would be 68 years...so only those Unix
+    # timestamp people need to worry about that
     def __init__(self):
         self._device_client = None
         self.iot_data = {}
         self._message_count = 0
 
+    # Tell Octoprint we will are using callbacks
     def initialize(self):
         self._printer.register_callback(self)
 
     ##~~ SettingsPlugin mixin
-
+    # Set the defaults for your Octoprint settings
     def get_settings_defaults(self):
         return dict(
             connection_string = "",
@@ -37,7 +42,12 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
             # put your plugin's default settings here
         )
 
+    # When we save the settings, if we have a new connection string, kill and restart
+    # the connection to IoT Hub
     def on_settings_save(self, data):
+        # This tripped me up you have to get your settings which gets the old settings
+        # then run the on settings save again which then gets the new settings
+        # I don't even pretend to understand it.
         old_conn_string = self._settings.get(["connection_string"])
         old_int = self._settings.get_int(["send_interval"])
 
@@ -51,15 +61,18 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
                 if asyncio.run(self.connect_to_iot_hub()):
                     self.start_iot_timer(new_int)
 
+    # Our timer to push telemetry on schedule
     def start_iot_timer(self, interval):
         self._iot_timer = octoprint.util.ResettableTimer(interval, self.periodic_data_wrapper)
         self._iot_timer.start()
 
+    # Wrapper to handle async threads because the Timer function cannot run coroutines
     def periodic_data_wrapper(self):
         asyncio.run(self.send_periodic_telemetry_data())
         self.start_iot_timer(self._settings.get_int(["send_interval"]))
 
-    
+    # This does the actual sending (finally)
+    # This fires based on your interval setting and grabs the current state of the printer
     async def send_periodic_telemetry_data(self):
         if self._printer.get_current_connection()[0] != "Closed":
             self._message_count += 1
@@ -70,18 +83,24 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
             msg.content_encoding = "utf-8"
             msg.content_type = "application/json"
             self._logger.info("IoT Hub Telemetry Message #%d" % self._message_count)
+            # Because we are good people we use a try/except here to prevent crashing Octoprint
             try:
+                # This sends the actual telemetry message to IoT Hub
                 await self._device_client.send_message(msg)
             except Exception as e:
                 self._logger.error("Could not send IoT Telemetry Message")
                 self._logger.error(str(e))
             if "temperature" in iot_dict:
                 try:
+                    # This sets the digital twin current state, just doing temperatures currently
+                    # TODO: Make this customizable information
                     await self._device_client.patch_twin_reported_properties(iot_dict["temperature"])
                 except Exception as e:
                     self._logger.error("Could not send Device twin update")
                     self._logger.error(str(e))
 
+    # This sends events (such as printing starting) to IoT Hub
+    # TODO: Allow event selection
     async def send_event_telemetry_data(self, message):
         self._message_count += 1
         msg = Message(message)
@@ -96,17 +115,24 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
             self._logger.error("Could not send IoT Event Message")
             self._logger.error(str(e))
 
+    # The data provided in the callback is an immutabledict json doesn't like that
+    # It also doesn't have the temperature data, so I don't like that
+    # I unimmutabl...ize? the immutabledict, change the state section to be more succinct
+    # and add the temperature data
     def iot_data_json_prep(self):
         thawed = octoprint.util.thaw_immutabledict(self.iot_data)
         thawed['state'] = self._printer.get_state_string()
         thawed['temperature'] = self._printer.get_current_temperatures()
         return thawed
 
+    # If we catch one of the events listed below, throw it up to IoT Hub
     def on_event(self, event, payload):
         if event == 'PrintStarted' or event == 'PrintFailed' or event == 'PrintDone' or event == 'PrintCancelled':
             payload['print_event'] = event
             asyncio.run(self.send_event_telemetry_data(json.dumps(payload)))
 
+    # I assume I will need to use this soon because I want to add a small toolbar indicator of status
+    # TODO: Add IoT Hub status icon/toolbar to UI
     ##~~ AssetPlugin mixin
 
     #def get_assets(self):
@@ -118,6 +144,7 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
     #        "less": ["less/azureiothub.less"]
     #    }
     
+    # If we are starting up, we should probably try to connect to IoT hub and start sending data
     def on_after_startup(self):
         if asyncio.run(self.connect_to_iot_hub()):
             interval = self._settings.get_int(["send_interval"])
@@ -147,10 +174,13 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
         else:
             return False
 
+    # Retrying in Azure is important, so this is the timer to make sure we try again
     def start_connection_retry_timer(self, interval):
         self._connection_retry_timer = octoprint.util.ResettableTimer(interval, self.connect_to_iot_hub)
         self._connection_retry_timer.start()
 
+    # Remember that callback being enabled 180 lines ago? This is where we fire it
+    # It is grabbing the data sent from the printer and saving it in the iot_data variable
     def on_printer_send_current_data(self, data):
         self.iot_data = data
 
