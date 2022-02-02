@@ -3,6 +3,7 @@ from __future__ import absolute_import
 import asyncio
 
 import json
+import re
 import uuid
 
 from azure.iot.device.aio import IoTHubDeviceClient
@@ -58,19 +59,7 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
 
         if old_conn_string != new_conn_string:
             if len(new_conn_string) > 0:
-                # Added loop check for Async calls to resolve Issue #1
-                loop = None
-                connection_success = False
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = None
-                if loop and loop.is_running():
-                    connection_success = loop.run_until_complete(self.connect_to_iot_hub())
-                else:
-                    connection_success = asyncio.run(self.connect_to_iot_hub())
-                if connection_success:
-                    self.start_iot_timer(new_int)
+                self.connect_to_iot_hub_asyncio()
 
     # Our timer to push telemetry on schedule
     def start_iot_timer(self, interval):
@@ -85,7 +74,7 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
     # This does the actual sending (finally)
     # This fires based on your interval setting and grabs the current state of the printer
     async def send_periodic_telemetry_data(self):
-        if self._printer.get_current_connection()[0] != "Closed":
+        if self._printer.get_current_connection()[0] != "Closed" and self._device_client.connected:
             self._message_count += 1
             iot_dict = self.iot_data_json_prep()
             msg = Message(json.dumps(iot_dict))
@@ -113,18 +102,19 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
     # This sends events (such as printing starting) to IoT Hub
     # TODO: Allow event selection
     async def send_event_telemetry_data(self, message):
-        self._message_count += 1
-        msg = Message(message)
-        msg.message_id = uuid.uuid4()
-        msg.correlation_id = "correlation-" + str(self._message_count)
-        msg.content_encoding = "utf-8"
-        msg.content_type = "application/json"
-        self._logger.info("IoT Hub Event Message #%d" % self._message_count)
-        try:
-            await self._device_client.send_message(msg)
-        except Exception as e:
-            self._logger.error("Could not send IoT Event Message")
-            self._logger.error(str(e))
+        if self._device_client.connected:
+            self._message_count += 1
+            msg = Message(message)
+            msg.message_id = uuid.uuid4()
+            msg.correlation_id = "correlation-" + str(self._message_count)
+            msg.content_encoding = "utf-8"
+            msg.content_type = "application/json"
+            self._logger.info("IoT Hub Event Message #%d" % self._message_count)
+            try:
+                await self._device_client.send_message(msg)
+            except Exception as e:
+                self._logger.error("Could not send IoT Event Message")
+                self._logger.error(str(e))
 
     # The data provided in the callback is an immutabledict json doesn't like that
     # It also doesn't have the temperature data, so I don't like that
@@ -157,19 +147,28 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
     
     # If we are starting up, we should probably try to connect to IoT hub and start sending data
     def on_after_startup(self):
+        self.connect_to_iot_hub_asyncio()
+
+    def connect_to_iot_hub_asyncio(self):
         # Added loop check for Async calls to resolve Issue #1
         loop = None
-        connection_success = False
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             loop = None
         if loop and loop.is_running():
-            connection_success = loop.run_until_complete(self.connect_to_iot_hub())
+            conn_task = asyncio.ensure_future(self.connect_to_iot_hub())
+            conn_task.add_done_callback(self.check_iot_connection)
         else:
-            connection_success = asyncio.run(self.connect_to_iot_hub())
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            conn_task = asyncio.ensure_future(self.connect_to_iot_hub())
+            conn_task.add_done_callback(self.check_iot_connection)
+            loop.run_until_complete(conn_task)
+            loop.close()
 
-        if connection_success:
+    def check_iot_connection(self, result):
+        if result.result():
             interval = self._settings.get_int(["send_interval"])
             self.start_iot_timer(interval)
             #self._device_client.on_twin_desired_properties_patch_received = twin_patch_handler
@@ -182,8 +181,8 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
     async def connect_to_iot_hub(self):
         conn_string = self._settings.get(["connection_string"])
         if len(conn_string) > 0:
-            if self._device_client:
-                await self._device_client.shutdown()
+            if self._device_client and self._device_client.connected:
+                await self._device_client.disconnect()
             try:
                 if len(conn_string) > 0:
                     self._device_client = IoTHubDeviceClient.create_from_connection_string(conn_string)
@@ -199,7 +198,7 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
 
     # Retrying in Azure is important, so this is the timer to make sure we try again
     def start_connection_retry_timer(self, interval):
-        self._connection_retry_timer = octoprint.util.ResettableTimer(interval, self.connect_to_iot_hub)
+        self._connection_retry_timer = octoprint.util.ResettableTimer(interval, self.connect_to_iot_hub_asyncio)
         self._connection_retry_timer.start()
 
     # Remember that callback being enabled 180 lines ago? This is where we fire it
