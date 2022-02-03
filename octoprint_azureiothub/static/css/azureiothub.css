@@ -1,0 +1,19 @@
+.navbar_iothub_status_online {
+    color: #006400;
+}
+
+.navbar_iothub_status_offline {
+    color: #a40000;
+}
+
+.navbar_iothub_status_warning {
+    color: #ffd300;
+}
+
+.navbar_iothub_status_unconfigured {
+    color: #a9a9a9;
+}
+
+.navbar_iothub_status {
+    padding: 0px 10px;
+}

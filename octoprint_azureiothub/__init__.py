@@ -29,6 +29,8 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
         self._device_client = None
         self.iot_data = {}
         self._message_count = 0
+        self._iot_hub_error_message = ""
+        self._iot_hub_status = "Disconnected"
 
     # Tell Octoprint we will are using callbacks
     def initialize(self):
@@ -42,6 +44,31 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
             send_interval = 10
             # put your plugin's default settings here
         )
+
+    # IoT Hub Status Tracking
+    def iot_hub_status(self):
+        if self._settings.get(["connection_string"]) == "":
+            self._plugin_manager.send_plugin_message(self._identifier,
+                dict(iot_hub_status="Unconfigured"))
+            self._iot_hub_status = "Unconfigured"
+            return
+        if self._iot_hub_status == "Disconnected":
+            self._plugin_manager.send_plugin_message(self._identifier,
+                dict(iot_hub_status=self._iot_hub_status, iot_hub_error=self._iot_hub_error_message))
+            return
+        if self._iot_hub_status == "Connected" and self._printer.get_current_connection()[0] == "Closed":
+            self._plugin_manager.send_plugin_message(self._identifier,
+                dict(iot_hub_status="Printer Disconnected", iot_hub_error="No telemetry being sent"))
+            return
+        if self._iot_hub_status == "Connected":
+            self._plugin_manager.send_plugin_message(self._identifier,
+                dict(iot_hub_status=self._iot_hub_status, iot_hub_message_number=self._message_count))
+            return
+
+    # Status push timer
+    def iot_hub_status_timer(self):
+        self._iot_status_timer = octoprint.util.RepeatedTimer(10, self.iot_hub_status)
+        self._iot_status_timer.start()
 
     # When we save the settings, if we have a new connection string, kill and restart
     # the connection to IoT Hub
@@ -87,14 +114,13 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
             try:
                 # This sends the actual telemetry message to IoT Hub
                 await self._device_client.send_message(msg)
-                self._plugin_manager.send_plugin_message(self._identifier,
-                    dict(iot_hub_status="Connected", iot_hub_message_number=self._message_count))
+                self._iot_hub_status = "Connected"
             except Exception as e:
                 error_msg = "Could not send IoT Telemetry Message"
                 self._logger.error(error_msg)
                 self._logger.error(str(e))
-                self._plugin_manager.send_plugin_message(self._identifier,
-                    dict(iot_hub_status="Disconnected", iot_hub_error=error_msg))
+                self._iot_hub_status = "Disconnected"
+                self._iot_hub_error_message = error_msg
             if "temperature" in iot_dict:
                 try:
                     # This sets the digital twin current state, just doing temperatures currently
@@ -104,8 +130,8 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
                     error_msg = "Could not send Device twin update"
                     self._logger.error(error_msg)
                     self._logger.error(str(e))
-                    self._plugin_manager.send_plugin_message(self._identifier,
-                        dict(iot_hub_status="Disconnected", iot_hub_error=error_msg))
+                    self._iot_hub_status = "Disconnected"                    
+                    self._iot_hub_error_message = error_msg
 
     # This sends events (such as printing starting) to IoT Hub
     # TODO: Allow event selection
@@ -120,14 +146,13 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
             self._logger.info("IoT Hub Event Message #%d" % self._message_count)
             try:
                 await self._device_client.send_message(msg)
-                self._plugin_manager.send_plugin_message(self._identifier,
-                    dict(iot_hub_status="Connected", iot_hub_message_number=self._message_count))
+                self._iot_hub_status = "Connected"
             except Exception as e:
                 error_msg = "Could not send IoT Event Message"
                 self._logger.error(error_msg)
                 self._logger.error(str(e))
-                self._plugin_manager.send_plugin_message(self._identifier,
-                    dict(iot_hub_status="Disconnected", iot_hub_error=error_msg))
+                self._iot_hub_status = "Disconnected"                    
+                self._iot_hub_error_message = error_msg
 
     # The data provided in the callback is an immutabledict json doesn't like that
     # It also doesn't have the temperature data, so I don't like that
@@ -148,6 +173,7 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
     # If we are starting up, we should probably try to connect to IoT hub and start sending data
     def on_after_startup(self):
         self.connect_to_iot_hub_asyncio()
+        self.iot_hub_status_timer()
 
     def connect_to_iot_hub_asyncio(self):
         # Added loop check for Async calls to resolve Issue #1
@@ -187,16 +213,15 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
                 if len(conn_string) > 0:
                     self._device_client = IoTHubDeviceClient.create_from_connection_string(conn_string)
                     await self._device_client.connect()
-                    self._plugin_manager.send_plugin_message(self._identifier,
-                                                 dict(iot_hub_status="Connected"))
+                    self._iot_hub_status = "Connected"
                     return True
             except Exception as e:
                 error_msg = "Could not connect to Azure IoT Hub with given connection string"
                 self._logger.error(error_msg)
                 self._logger.error(str(e))
                 self.start_connection_retry_timer(60)
-                self._plugin_manager.send_plugin_message(self._identifier,
-                                                 dict(iot_hub_status="Disconnected", iot_hub_error=error_msg))
+                self._iot_hub_status = "Disconnected"                    
+                self._iot_hub_error_message = error_msg
                 return False
         else:
             return False
