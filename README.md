@@ -10,7 +10,7 @@ Turn your printer into a true IoT Device with the Azure IoT Hub plugin.
 
 Install Manually using this URL:
 
-    https://github.com/cbattlegear/OctoPrint-AzureIoTHub/archive/master.zip
+    https://github.com/cbattlegear/OctoPrint-AzureIoTHub/archive/main.zip
 
 **Coming Soon:** Integrated Plugin Manager installation
 
