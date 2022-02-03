@@ -41,7 +41,8 @@ class AzureiothubPlugin(octoprint.plugin.SettingsPlugin,
     def get_settings_defaults(self):
         return dict(
             connection_string = "",
-            send_interval = 10
+            send_interval = 10,
+            display_status_icon = True
             # put your plugin's default settings here
         )
 

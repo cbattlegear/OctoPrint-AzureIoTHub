@@ -2,14 +2,19 @@ $(function() {
     function IotHubViewModel(parameters) {
         var self = this;
 
-        self.global_settings = parameters[0];
+        self.settings = parameters[0];
         self.iotHubStatus = ko.observable("");
         self.iotHubStatusClass = ko.observable("");
+        self.showIotHubStatus = ko.observable();
 
         self.onBeforeBinding = function () {
-            self.settings = self.global_settings.settings.plugins.azureiothub;
             self.iotHubStatus("Waiting For Status");
             self.iotHubStatusClass("navbar_iothub_status_unconfigured");
+            if(self.settings.settings.plugins.azureiothub.display_status_icon() == false) {
+                self.showIotHubStatus(false);
+            } else {
+                self.showIotHubStatus(true);
+            }
         };
 
         self.onDataUpdaterPluginMessage = function(plugin, data) {
@@ -31,13 +36,21 @@ $(function() {
                     self.iotHubStatus("IoT Hub Disconnected - Error: " + data.iot_hub_error);
                     self.iotHubStatusClass("navbar_iothub_status_offline");
                 } else if (data.iot_hub_status == "Unconfigured") {
-                    self.iotHubStatus("Connection String Not Configured");
+                    self.iotHubStatus("Check Configuration Settings");
                     self.iotHubStatusClass("navbar_iothub_status_unconfigured");
                 } else if (data.iot_hub_status == "Printer Disconnected") {
                     self.iotHubStatus("Printer Not Connected - No Telemetry Being Sent");
                     self.iotHubStatusClass("navbar_iothub_status_warning");
                 }
                 
+            }
+        };
+
+        self.onSettingsHidden = function () {
+            if(self.settings.settings.plugins.azureiothub.display_status_icon() == false) {
+                self.showIotHubStatus(false);
+            } else {
+                self.showIotHubStatus(true);
             }
         };
 
